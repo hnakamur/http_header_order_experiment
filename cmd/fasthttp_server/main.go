@@ -29,6 +29,7 @@ func main() {
 		// Other Server settings may be set here.
 	}
 
+	log.Printf("fasthttp_server is going to listen %s...", addr)
 	// Start the server listening for incoming requests on the given address.
 	//
 	// ListenAndServe returns only on error, so usually it blocks forever.

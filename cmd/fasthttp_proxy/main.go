@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 
 	"github.com/valyala/fasthttp"
@@ -11,13 +12,15 @@ import (
 // and modified.
 
 type reverseProxy struct {
-	proxyClient *fasthttp.HostClient
+	proxyClient *fasthttp.ProxyClient
 }
 
 func newReverseProxy(hostAddr string) *reverseProxy {
 	return &reverseProxy{
-		proxyClient: &fasthttp.HostClient{
-			Addr: hostAddr,
+		proxyClient: &fasthttp.ProxyClient{
+			fasthttp.HostClient{
+				Addr: hostAddr,
+			},
 		},
 	}
 }
@@ -26,7 +29,31 @@ func (p *reverseProxy) Handle(ctx *fasthttp.RequestCtx) {
 	req := &ctx.Request
 	resp := &ctx.Response
 	p.prepareRequest(req)
-	if err := p.proxyClient.Do(req, resp); err != nil {
+
+	c := p.proxyClient
+
+	// The following command does the same thing as HostClient.Do().
+	retry, s, err := c.SendRequest(req)
+	if err == nil {
+		retry, err = c.ReadResponseHeader(s, req, resp)
+		if err == nil {
+			retry, err = c.ReadResponseBody(s, req, resp)
+		}
+	}
+	if err != nil && retry && fasthttp.IsIdempotent(req) {
+		_, s, err = c.SendRequest(req)
+		if err == nil {
+			_, err = c.ReadResponseHeader(s, req, resp)
+			if err == nil {
+				_, err = c.ReadResponseBody(s, req, resp)
+			}
+		}
+	}
+
+	if err == io.EOF {
+		err = fasthttp.ErrConnectionClosed
+	}
+	if err != nil {
 		ctx.Logger().Printf("error when proxying the request: %s", err)
 	}
 	p.postprocessResponse(resp)
@@ -60,6 +87,7 @@ func main() {
 	// Start the server listening for incoming requests on the given address.
 	//
 	// ListenAndServe returns only on error, so usually it blocks forever.
+	log.Printf("fasthttp_proxy is going to listen %s...", addr)
 	if err := fasthttp.ListenAndServe(addr, rp.Handle); err != nil {
 		log.Fatalf("error in ListenAndServe: %s", err)
 	}
